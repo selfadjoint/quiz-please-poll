@@ -117,7 +117,7 @@ resource "aws_lambda_permission" "allow_execution" {
 resource "aws_cloudwatch_event_rule" "schedule_rule" {
   name                = "telegram_bot_schedule_rule"
   description         = "Scheduled rule to trigger telegram bot Lambda"
-  schedule_expression = "cron(0 15 * * ? *)" # Runs every day at 15:00 UTC
+  schedule_expression = "cron(0 15 ? * WED,FRI *)" # Runs every Wednesday and Friday at 15:00 UTC
 }
 
 resource "aws_cloudwatch_event_target" "lambda_target" {
