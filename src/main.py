@@ -34,11 +34,17 @@ def get_games(_table):
             TableName=_table,
             IndexName='poll_created_index',
             KeyConditionExpression='is_poll_created = :val',
-            ProjectionExpression='game_id, game_date, game_type',
+            ProjectionExpression='game_id, game_date, game_time, game_venue, game_type',
             ExpressionAttributeValues={':val': {'N': '0'}},
         )
-        games = [[x['game_id']['N'], x['game_date']['S'], x['game_type']['S']] for x in response['Items'] if
-                 pdl.parse(x['game_date']['S']) <= pdl.today().add(days=5)]
+        games = [[x['game_id']['N'],
+                  x['game_date']['S'],
+                  x['game_time']['S'],
+                  x['game_venue']['S'],
+                  x['game_type']['S']]
+                 for x in response['Items']
+                 if pdl.parse(x['game_date']['S']) <= pdl.today().add(days=5)
+                 ]
         logger.info(f'Loaded {len(games)} game(s) from the reg table')
         return games
 
@@ -198,10 +204,10 @@ def lambda_handler(event=None, context=None):
         return {'statusCode': 500, 'body': json.dumps('No games to process')}
 
     for game in games:
-        game_id, game_date, game_type = game
+        game_id, game_date, game_time, game_venue, game_type = game
         game_day = pdl.parse(game_date).format('dd, DD MMMM', locale='ru').capitalize()
 
-        message = f'{game_day}, {game_type}'
+        message = f'⏰ {game_day}, {game_time}\n\n📍 {game_venue}\n\n🎰 {game_type}'
         message_res = send_message(BOT_TOKEN, CHANNEL_ID, message)
 
         if not message_res:
