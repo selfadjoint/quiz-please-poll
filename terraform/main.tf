@@ -112,6 +112,7 @@ resource "aws_lambda_permission" "allow_execution" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.telegram_bot.function_name
   principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.schedule_rule.arn
 }
 
 resource "aws_cloudwatch_event_rule" "schedule_rule" {

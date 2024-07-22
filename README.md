@@ -26,7 +26,7 @@ quiz-please-poll/
 ├── src/
 │   ├── main.py
 │   ├── requirements.txt
-├── ├── dependencies
+│   ├── dependencies
 ├── terraform/
 │   ├── main.tf
 │   ├── variables.tf
