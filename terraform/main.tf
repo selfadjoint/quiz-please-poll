@@ -15,16 +15,8 @@ provider "aws" {
   profile                  = var.aws_profile
 }
 
-# Data source to reference existing IAM role
-data "aws_iam_role" "existing_lambda_execution_role" {
-  count = var.use_existing_role ? 1 : 0
-  name  = var.existing_role_name
-}
-
 resource "aws_iam_role" "lambda_execution_role" {
-  count = var.use_existing_role ? 0 : 1
-
-  name = var.new_role_name
+  name = var.resource_name
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
@@ -42,13 +34,13 @@ resource "aws_iam_role" "lambda_execution_role" {
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_policy_attachment" {
-  role       = var.use_existing_role ? data.aws_iam_role.existing_lambda_execution_role[0].name : aws_iam_role.lambda_execution_role[0].name
+  role       = aws_iam_role.lambda_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy" "dynamodb_policy" {
-  name = "dynamodb_policy"
-  role = var.use_existing_role ? data.aws_iam_role.existing_lambda_execution_role[0].id : aws_iam_role.lambda_execution_role[0].id
+  name = var.resource_name
+  role = aws_iam_role.lambda_execution_role.id
 
   policy = jsonencode({
     Version = "2012-10-17",
@@ -62,8 +54,9 @@ resource "aws_iam_role_policy" "dynamodb_policy" {
           "dynamodb:Query"
         ],
         Resource = [
-          aws_dynamodb_table.telegram_bot_updates.arn,
-          var.dynamodb_reg_table_arn
+          aws_dynamodb_table.telegram_bot_updates.arn, # Allow access to the updates table
+          var.dynamodb_reg_table_arn,                  # Allow access to the registration data table created separately
+          "${var.dynamodb_reg_table_arn}/index/*"      # Allow access to the GSIs in the registration data table
         ]
       }
     ]
@@ -71,7 +64,7 @@ resource "aws_iam_role_policy" "dynamodb_policy" {
 }
 
 resource "aws_dynamodb_table" "telegram_bot_updates" {
-  name         = var.dynamodb_update_table_name
+  name         = var.resource_name
   hash_key     = "bot_name"
   billing_mode = "PAY_PER_REQUEST"
 
@@ -86,8 +79,8 @@ resource "aws_dynamodb_table" "telegram_bot_updates" {
 resource "aws_lambda_function" "telegram_bot" {
   description      = "Create polls about participating in a quiz game in Telegram"
   filename         = "${path.module}/lambda.zip"
-  function_name    = var.lambda_function_name
-  role             = var.use_existing_role ? data.aws_iam_role.existing_lambda_execution_role[0].arn : aws_iam_role.lambda_execution_role[0].arn
+  function_name    = var.resource_name
+  role             = aws_iam_role.lambda_execution_role.arn
   handler          = "main.lambda_handler"
   runtime          = "python3.11"
   source_code_hash = filebase64sha256("${path.module}/lambda.zip")
@@ -96,7 +89,7 @@ resource "aws_lambda_function" "telegram_bot" {
   environment {
     variables = {
       DYNAMODB_REG_TABLE_NAME    = var.dynamodb_reg_table_name
-      DYNAMODB_UPDATE_TABLE_NAME = var.dynamodb_update_table_name
+      DYNAMODB_UPDATE_TABLE_NAME = aws_dynamodb_table.telegram_bot_updates.name
       BOT_NAME                   = var.bot_name
       BOT_TOKEN                  = var.bot_token
       CHANNEL_ID                 = var.channel_id
@@ -116,13 +109,13 @@ resource "aws_lambda_permission" "allow_execution" {
 }
 
 resource "aws_cloudwatch_event_rule" "schedule_rule" {
-  name                = "telegram_bot_schedule_rule"
-  description         = "Scheduled rule to trigger telegram bot Lambda"
+  name                = var.resource_name
+  description         = "Scheduled rule to trigger telegram bot Lambda on Wednesdays and Fridays"
   schedule_expression = "cron(0 15 ? * WED,FRI *)" # Runs every Wednesday and Friday at 15:00 UTC
 }
 
 resource "aws_cloudwatch_event_target" "lambda_target" {
   rule      = aws_cloudwatch_event_rule.schedule_rule.name
-  target_id = "lambda_target"
+  target_id = var.resource_name
   arn       = aws_lambda_function.telegram_bot.arn
 }

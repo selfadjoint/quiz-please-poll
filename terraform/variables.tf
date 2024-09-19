@@ -30,16 +30,6 @@ variable "dynamodb_reg_table_name" {
   default = "QuizPleaseReg"
 }
 
-variable "dynamodb_update_table_name" {
-  type    = string
-  default = "QuizPleasePollUpdates"
-}
-
-variable "lambda_function_name" {
-  type    = string
-  default = "QuizPleasePoll"
-}
-
 variable "bot_token" {
   type = string
 }
@@ -56,20 +46,8 @@ variable "group_id" {
   type = string
 }
 
-variable "use_existing_role" {
-  description = "Boolean to determine whether to use an existing IAM role"
-  type        = bool
-  default     = false
-}
-
-variable "existing_role_name" {
-  description = "The name of the existing IAM role to use"
+variable "resource_name" {
+  description = "The prefix for all resource names"
   type        = string
-  default     = "lambda_execution_role"
-}
-
-variable "new_role_name" {
-  description = "The name of the new IAM role to create if not using an existing one"
-  type        = string
-  default     = "lambda_execution_role"
+  default     = "QuizPleasePoll"
 }
