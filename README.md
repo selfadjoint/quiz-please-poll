@@ -4,72 +4,73 @@ This project contains an AWS Lambda function and Terraform configuration to crea
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
 - [Project Structure](#project-structure)
+- [Prerequisites](#prerequisites)
 - [Setup](#setup)
 - [Environment Variables](#environment-variables)
 - [Usage](#usage)
 
+## Project Structure
+
+```plaintext
+├── src
+│   ├── main.py                # Lambda function code
+│   ├── requirements.txt       # Python dependency definitions
+│   └── (other source files or folders)
+└── terraform
+    ├── main.tf                # Terraform configuration
+    ├── variables.tf           # Input variables
+    ├── backend.hcl            # Backend configuration (not committed; see below)
+    └── (other Terraform files)
+├── README.md
+```
+
 ## Prerequisites
 
-Before you begin, ensure you have the following installed:
-
+- DynamoDB table with game data. Check the [Quiz Please Game Registration](https://github.com/selfadjoint/quiz-please-reg) project for the required DynamoDB table setup.
 - [AWS CLI](https://aws.amazon.com/cli/)
 - [Terraform](https://www.terraform.io/)
 - [Python 3.11+](https://www.python.org/)
 - [pip](https://pip.pypa.io/en/stable/)
 
-## Project Structure
-
-```plaintext
-quiz-please-poll/
-├── src/
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── dependencies
-├── terraform/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── terraform.tfvars
-│   └── lambda.zip
-├── README.md
-```
-
 ## Setup
 
-1. **Clone the repository**:
+### 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/your-repo/telegram-bot-poll-creator.git
-   cd telegram-bot-poll-creator
-   
-2. **Navigate to the Terraform directory**:
+   git clone https://github.com//selfadjoint/quiz-please-poll.git
+   cd quiz-please-poll
+  ````
 
-   ```bash
-   cd ../terraform
-   ```
+### 2. Install Python Dependencies
+The dependencies are not committed to the repository. To install them into the src folder, run:
+```bash
+pip install --upgrade --target ./src -r src/requirements.txt
+```
+This command installs all required Python packages into the src directory so that they are included in the Lambda deployment package.
 
-3. **Initialize Terraform**:
+### 3. Configure the Terraform Backend and Variables
+Terraform uses an S3 backend for state storage. Since sensitive information should not be committed to the repository, create a separate backend configuration file.
 
-   ```bash
-   terraform init
-   ```
+Create a file named `backend.hcl` inside the `terraform` folder with content similar to:
 
-4. **Create a `terraform.tfvars` file with the necessary variables. Example**:
+```hcl
+bucket       = "your-tf-state-bucket"                  # Replace with your S3 bucket name
+key          = "your-resource-name/terraform.tfstate"  # Adjust as needed
+region       = "us-east-1"                             # Your AWS region
+profile      = "your_aws_profile"                      # The AWS CLI profile to use
+encrypt      = true
+use_lockfile = true
+```
+**Create a `terraform.tfvars` file with the necessary variables. Example**:
 
    ```hcl
-   aws_region                 = "us-east-1"
-   lambda_function_name       = "TelegramBotFunction"
+   aws_profile                = "your_aws_profile"
    bot_name                   = "YourBotName"
    bot_token                  = "YOUR_BOT_TOKEN"
    channel_id                 = "YOUR_CHANNEL_ID"
    group_id                   = "YOUR_GROUP_ID"
-   dynamodb_reg_table_name    = "TelegramBotReg"
-   dynamodb_update_table_name = "TelegramBotUpdates"
-   dynamodb_reg_table_arn     = "arn:aws:dynamodb:us-east-1:123456789012:table/TelegramBotReg"
-   use_existing_role          = true
-   existing_role_name         = "lambda_execution_role"
+   dynamodb_reg_table_arn     = "arn:aws:dynamodb:us-east-1:123456789012:table/QuizPleaesReg"
    ```
 
 5. **Apply the Terraform configuration**:
@@ -85,7 +86,7 @@ quiz-please-poll/
 The Lambda function uses the following environment variables:
 
 - `DYNAMODB_REG_TABLE_NAME`: Name of the DynamoDB registration table.
-- `DYNAMODB_UPDATE_TABLE_NAME`: Name of the DynamoDB update table.
+- `DYNAMODB_UPDATE_TABLE_NAME`: Name of the DynamoDB update table (created by Terraform).
 - `BOT_NAME`: Name of the Telegram bot.
 - `BOT_TOKEN`: Token for the Telegram bot.
 - `CHANNEL_ID`: ID of the Telegram channel.
@@ -95,7 +96,7 @@ These variables are set in the Terraform configuration and passed to the Lambda 
 
 ## Usage
 
-Once deployed, the Lambda function will run every day at 15:00 UTC. It will:
+Once deployed, the Lambda function will run every Wednesday and Friday at 15:00 UTC, the schedule may be adjusted in [main.tf](./terraform/main.tf). It will:
 
 1. Load games from the DynamoDB registration table.
 2. Send a message to the Telegram channel for each game.
@@ -105,10 +106,9 @@ Once deployed, the Lambda function will run every day at 15:00 UTC. It will:
 
 Logs for the Lambda function can be viewed in AWS CloudWatch.
 
-## Important Note
-
-This project uses a DynamoDB table with game registration data that should be created separately. Ensure that the `TelegramBotReg` table exists and is correctly populated with game registration data before running the Lambda function.
-
-## License
-
-This project is licensed under the MIT License.
+## Clean Up
+To remove all resources created by Terraform, run:
+```bash
+terraform destroy
+```
+This will tear down the deployed AWS resources.
