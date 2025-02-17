@@ -73,13 +73,25 @@ use_lockfile = true
    dynamodb_reg_table_arn     = "arn:aws:dynamodb:us-east-1:123456789012:table/QuizPleaesReg"
    ```
 
-5. **Apply the Terraform configuration**:
+### 4. Initialize Terraform
+Change to the terraform directory and initialize Terraform using the backend configuration:
+```bash
+cd terraform
+terraform init -backend-config=backend.hcl
+```
+This command sets up the backend and downloads required providers.
 
-   ```bash
-   terraform apply
-   ```
+### 5. Review and Apply the Terraform Configuration
+First, run a plan to see the changes that Terraform will apply:
+```bash
+terraform plan
+```
 
-   Review the changes and type `yes` to confirm.
+If everything looks correct, deploy the resources with:
+```bash
+terraform apply
+```
+Confirm the apply action when prompted.
 
 ## Environment Variables
 
