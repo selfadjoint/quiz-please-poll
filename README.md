@@ -9,6 +9,7 @@ This project contains an AWS Lambda function and Terraform configuration to crea
 - [Setup](#setup)
 - [Environment Variables](#environment-variables)
 - [Usage](#usage)
+- [Clean Up](#clean-up)
 
 ## Project Structure
 
@@ -37,10 +38,10 @@ This project contains an AWS Lambda function and Terraform configuration to crea
 
 ### 1. **Clone the repository**:
 
-   ```bash
-   git clone https://github.com//selfadjoint/quiz-please-poll.git
-   cd quiz-please-poll
-  ````
+```bash
+ git clone https://github.com//selfadjoint/quiz-please-poll.git
+ cd quiz-please-poll
+````
 
 ### 2. Install Python Dependencies
 The dependencies are not committed to the repository. To install them into the src folder, run:
@@ -64,14 +65,15 @@ use_lockfile = true
 ```
 **Create a `terraform.tfvars` file with the necessary variables. Example**:
 
-   ```hcl
-   aws_profile                = "your_aws_profile"
-   bot_name                   = "YourBotName"
-   bot_token                  = "YOUR_BOT_TOKEN"
-   channel_id                 = "YOUR_CHANNEL_ID"
-   group_id                   = "YOUR_GROUP_ID"
-   dynamodb_reg_table_arn     = "arn:aws:dynamodb:us-east-1:123456789012:table/QuizPleaesReg"
-   ```
+```hcl
+aws_credentials_file       = "~/.aws/credentials"
+aws_profile                = "your_aws_profile"
+bot_name                   = "YourBotName"
+bot_token                  = "YOUR_BOT_TOKEN"
+channel_id                 = "YOUR_CHANNEL_ID"
+group_id                   = "YOUR_GROUP_ID"
+dynamodb_reg_table_arn     = "arn:aws:dynamodb:us-east-1:123456789012:table/QuizPleaesReg"
+ ```
 
 ### 4. Initialize Terraform
 Change to the terraform directory and initialize Terraform using the backend configuration:
