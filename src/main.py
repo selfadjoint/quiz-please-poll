@@ -34,6 +34,7 @@ def get_games(_table):
             TableName=_table,
             IndexName='poll_created_index',
             KeyConditionExpression='is_poll_created = :val',
+            FilterExpression='attribute_exists(reg_date)',
             ProjectionExpression='game_id, game_date, game_time, game_venue, game_type',
             ExpressionAttributeValues={':val': {'N': '0'}},
         )
@@ -51,6 +52,7 @@ def get_games(_table):
     except Exception as e:
         logger.error(f'Failed to load games: {e}')
         return None
+
 
 
 def send_message(_bot_token, _channel_id, _message):
