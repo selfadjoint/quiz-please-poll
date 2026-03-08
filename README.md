@@ -18,6 +18,8 @@ This project contains an AWS Lambda function and Terraform configuration to crea
 │   ├── main.py                # Lambda function code
 │   ├── requirements.txt       # Python dependency definitions
 │   └── (other source files or folders)
+├── sql
+│   └── 001_create_telegram_bot_updates.sql  # Postgres DDL for Telegram update offsets
 └── terraform
     ├── main.tf                # Terraform configuration
     ├── variables.tf           # Input variables
@@ -28,7 +30,8 @@ This project contains an AWS Lambda function and Terraform configuration to crea
 
 ## Prerequisites
 
-- DynamoDB table with game data. Check the [Quiz Please Game Registration](https://github.com/selfadjoint/quiz-please-reg) project for the required DynamoDB table setup.
+- Postgres with the `quizplease.games`, `quizplease.game_registration_tracking`, and `quizplease.game_registration_overview` objects already created.
+- Apply [sql/001_create_telegram_bot_updates.sql](./sql/001_create_telegram_bot_updates.sql) to create the table that stores the Telegram update offset previously kept in `QuizPleasePoll`.
 - [AWS CLI](https://aws.amazon.com/cli/)
 - [Terraform](https://www.terraform.io/)
 - [Python 3.11+](https://www.python.org/)
@@ -41,7 +44,7 @@ This project contains an AWS Lambda function and Terraform configuration to crea
 ```bash
  git clone https://github.com//selfadjoint/quiz-please-poll.git
  cd quiz-please-poll
-````
+```
 
 ### 2. Install Python Dependencies
 The dependencies are not committed to the repository. To install them into the src folder, run:
@@ -66,14 +69,18 @@ use_lockfile = true
 **Create a `terraform.tfvars` file with the necessary variables. Example**:
 
 ```hcl
-aws_credentials_file       = "~/.aws/credentials"
+aws_credentials_file       = ["~/.aws/credentials"]
 aws_profile                = "your_aws_profile"
 bot_name                   = "YourBotName"
 bot_token                  = "YOUR_BOT_TOKEN"
 channel_id                 = "YOUR_CHANNEL_ID"
 group_id                   = "YOUR_GROUP_ID"
-dynamodb_reg_table_arn     = "arn:aws:dynamodb:us-east-1:123456789012:table/QuizPleaesReg"
- ```
+postgres_host              = "your-postgres-host"
+postgres_port              = 5432
+postgres_database          = "your_database"
+postgres_user              = "your_user"
+postgres_password          = "your_password"
+```
 
 ### 4. Initialize Terraform
 Change to the terraform directory and initialize Terraform using the backend configuration:
@@ -99,8 +106,11 @@ Confirm the apply action when prompted.
 
 The Lambda function uses the following environment variables:
 
-- `DYNAMODB_REG_TABLE_NAME`: Name of the DynamoDB registration table.
-- `DYNAMODB_UPDATE_TABLE_NAME`: Name of the DynamoDB update table (created by Terraform).
+- `DB_HOST`: Postgres host name.
+- `DB_PORT`: Postgres port.
+- `DB_NAME`: Postgres database name.
+- `DB_USER`: Postgres user name.
+- `DB_PASSWORD`: Postgres password.
 - `BOT_NAME`: Name of the Telegram bot.
 - `BOT_TOKEN`: Token for the Telegram bot.
 - `CHANNEL_ID`: ID of the Telegram channel.
@@ -112,13 +122,15 @@ These variables are set in the Terraform configuration and passed to the Lambda 
 
 Once deployed, the Lambda function will run every Wednesday and Friday at 15:00 UTC, the schedule may be adjusted in [main.tf](./terraform/main.tf). It will:
 
-1. Load games from the DynamoDB registration table.
+1. Load games from `quizplease.game_registration_overview`.
 2. Send a message to the Telegram channel for each game.
-3. Retrieve recent updates from the connected Telegram group.
+3. Retrieve recent updates from the connected Telegram group using the offset stored in `quizplease.telegram_bot_updates`.
 4. Create a poll in the group based on the updates.
-5. Update the DynamoDB table with the poll creation status.
+5. Update `quizplease.game_registration_tracking` with the poll creation status.
 
 Logs for the Lambda function can be viewed in AWS CloudWatch.
+
+If the target Postgres instance is only reachable inside a private network, the Lambda must also be attached to the correct VPC, subnets, and security groups. That networking is not managed by the current Terraform in this repository.
 
 ## Clean Up
 To remove all resources created by Terraform, run:

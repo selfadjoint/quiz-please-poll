@@ -2,7 +2,6 @@ import json
 import logging
 import os
 
-import boto3
 import pendulum as pdl
 import requests as req
 
@@ -13,46 +12,150 @@ logging.basicConfig(
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+QUIZPLEASE_SCHEMA = 'quizplease'
+
 # Set up constants
-DYNAMODB_REG_TABLE_NAME = os.environ['DYNAMODB_REG_TABLE_NAME']
-DYNAMODB_UPDATE_TABLE_NAME = os.environ['DYNAMODB_UPDATE_TABLE_NAME']
 BOT_NAME = os.environ['BOT_NAME']
 BOT_TOKEN = os.environ['BOT_TOKEN']
 CHANNEL_ID = os.environ['CHANNEL_ID']
 GROUP_ID = os.environ['GROUP_ID']
 
-# Initialize a DynamoDB client
-dynamodb = boto3.client('dynamodb')
 
-
-def get_games(_table):
-    """
-    Loads the games we have already registered at from a DynamoDB table to create a poll.
-    """
+def get_db_connection():
     try:
-        response = dynamodb.query(
-            TableName=_table,
-            IndexName='poll_created_index',
-            KeyConditionExpression='is_poll_created = :val',
-            FilterExpression='attribute_exists(reg_date)',
-            ProjectionExpression='game_id, game_date, game_time, game_venue, game_type',
-            ExpressionAttributeValues={':val': {'N': '0'}},
-        )
-        games = [[x['game_id']['N'],
-                  x['game_date']['S'],
-                  x['game_time']['S'],
-                  x['game_venue']['S'],
-                  x['game_type']['S']]
-                 for x in response['Items']
-                 if pdl.parse(x['game_date']['S']) <= pdl.today().add(days=5)
-                 ]
-        logger.info(f'Loaded {len(games)} game(s) from the reg table')
-        return games
+        import psycopg2
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            'psycopg2 is not installed. Install src/requirements.txt before running the Lambda locally.'
+        ) from exc
 
-    except Exception as e:
-        logger.error(f'Failed to load games: {e}')
-        return None
+    return psycopg2.connect(
+        host=os.environ['DB_HOST'],
+        port=os.environ.get('DB_PORT', '5432'),
+        database=os.environ['DB_NAME'],
+        user=os.environ['DB_USER'],
+        password=os.environ['DB_PASSWORD'],
+    )
 
+
+class PostgresStore:
+    def __init__(self):
+        self.connection = get_db_connection()
+
+    def close(self):
+        self.connection.close()
+
+    def get_games(self):
+        """
+        Loads the games we have already registered at from Postgres to create a poll.
+        """
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(
+                f'''
+                SELECT game_id, game_date, COALESCE(game_time, ''), COALESCE(game_venue, ''), COALESCE(game_type, '')
+                FROM {QUIZPLEASE_SCHEMA}.game_registration_overview
+                WHERE reg_date IS NOT NULL
+                  AND is_poll_created = FALSE
+                  AND game_date <= CURRENT_DATE + 5
+                ORDER BY game_date, COALESCE(game_time, ''), game_id
+                '''
+            )
+            games = [
+                [str(game_id), game_date.isoformat(), game_time, game_venue, game_type]
+                for game_id, game_date, game_time, game_venue, game_type in cursor.fetchall()
+            ]
+            logger.info(f'Loaded {len(games)} game(s) from Postgres')
+            return games
+        except Exception as e:
+            logger.error(f'Failed to load games: {e}')
+            return None
+        finally:
+            cursor.close()
+
+    def get_last_update_id(self, bot_name):
+        """
+        Gets the last update ID from Postgres.
+        """
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(
+                f'''
+                SELECT update_id
+                FROM {QUIZPLEASE_SCHEMA}.telegram_bot_updates
+                WHERE bot_name = %s
+                ''',
+                (bot_name,),
+            )
+            row = cursor.fetchone()
+            if row:
+                logger.info(f'Last update ID: {row[0]}')
+                return int(row[0])
+
+            logger.info('No existing update ID found, starting from the beginning.')
+            return 0
+        except Exception as e:
+            logger.error(f'Failed to get last update ID: {e}')
+            return 0
+        finally:
+            cursor.close()
+
+    def update_last_update_id(self, bot_name, update_id):
+        """
+        Updates the last update ID in Postgres.
+        """
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(
+                f'''
+                INSERT INTO {QUIZPLEASE_SCHEMA}.telegram_bot_updates (bot_name, update_id)
+                VALUES (%s, %s)
+                ON CONFLICT (bot_name)
+                DO UPDATE
+                SET update_id = EXCLUDED.update_id,
+                    updated_at = CURRENT_TIMESTAMP
+                ''',
+                (bot_name, update_id),
+            )
+            self.connection.commit()
+            logger.info(f'Last update ID updated to {update_id}')
+        except Exception as e:
+            self.connection.rollback()
+            logger.error(f'Failed to update last update ID: {e}')
+        finally:
+            cursor.close()
+
+    def mark_poll_created(self, game_id):
+        """
+        Marks a game as having a created poll in Postgres.
+        """
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(
+                f'''
+                UPDATE {QUIZPLEASE_SCHEMA}.game_registration_tracking
+                SET poll_created = TRUE,
+                    poll_date = CURRENT_DATE,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE game_id = %s
+                RETURNING game_id
+                ''',
+                (int(game_id),),
+            )
+            row = cursor.fetchone()
+            self.connection.commit()
+            if row:
+                logger.info(f'Game {game_id} updated successfully')
+                return True
+
+            logger.error(f'Game {game_id} was not updated')
+            return False
+        except Exception as e:
+            self.connection.rollback()
+            logger.error(f'Failed to update game {game_id}: {e}')
+            return False
+        finally:
+            cursor.close()
 
 
 def send_message(_bot_token, _channel_id, _message):
@@ -73,41 +176,13 @@ def send_message(_bot_token, _channel_id, _message):
         return None
 
 
-def get_last_update_id(_table, _bot_name):
-    """
-    Gets the last update ID from a DynamoDB table.
-    """
-    try:
-        response = dynamodb.get_item(TableName=_table, Key={'bot_name': {'S': _bot_name}})
-        if 'Item' in response and 'update_id' in response['Item']:
-            logger.info(f'Last update ID: {response["Item"]["update_id"]["N"]}')
-            return int(response['Item']['update_id']['N'])
-        else:
-            logger.info('No existing update ID found, starting from the beginning.')
-            return 0  # Return 0 to indicate no updates have been processed yet
-    except Exception as e:
-        logger.error(f'Failed to get last update ID: {e}')
-        return 0  # Return 0 in case of any exception
-
-
-def update_last_update_id(_table, _bot_name, _update_id):
-    """
-    Updates the last update ID in a DynamoDB table.
-    """
-    try:
-        dynamodb.put_item(TableName=_table, Item={'bot_name': {'S': _bot_name}, 'update_id': {'N': str(_update_id)}})
-        logger.info(f'Last update ID updated to {str(_update_id)}')
-    except Exception as e:
-        logger.error(f'Failed to update last update ID: {e}')
-
-
-def get_group_updates(_bot_token, _table, _bot_name, _timeout=5, _time_window=15):
+def get_group_updates(_bot_token, _store, _bot_name, _timeout=5, _time_window=15):
     """
     Gets recent updates from a group connected to the channel.
     """
     url = f'https://api.telegram.org/bot{_bot_token}/getUpdates'
     cutoff_time = pdl.now().subtract(seconds=_time_window).int_timestamp
-    last_update_id = get_last_update_id(_table, _bot_name)
+    last_update_id = _store.get_last_update_id(_bot_name)
     recent_updates = []
 
     while True:
@@ -130,7 +205,7 @@ def get_group_updates(_bot_token, _table, _bot_name, _timeout=5, _time_window=15
                 recent_updates.append(update)
             last_update_id = update['update_id'] + 1
 
-        update_last_update_id(_table, _bot_name, last_update_id)
+        _store.update_last_update_id(_bot_name, last_update_id)
 
     return recent_updates
 
@@ -179,58 +254,54 @@ def send_poll(_bot_token, _group_id, _question, _options, _reply_to_message_id):
         return response.json()['ok']
 
 
-def update_item(_table, _game_id):
-    """
-    Updates an item in a DynamoDB table.
-    """
-    try:
-        response = dynamodb.update_item(
-            TableName=_table,
-            Key={'game_id': {'N': _game_id}},
-            UpdateExpression='SET is_poll_created = :P, poll_date = :D',
-            ExpressionAttributeValues={':P': {'N': '1'}, ':D': {'S': pdl.today().format('YYYY-MM-DD')}},
-        )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-            logger.info(f'Game {_game_id} updated successfully')
-        return response['ResponseMetadata']
-    except Exception as e:
-        logger.error(f'Failed to update item {_game_id} in table {_table}: {e}')
-        return None
-
-
-# Main function
 def lambda_handler(event=None, context=None):
-    games = get_games(DYNAMODB_REG_TABLE_NAME)
-    if not games:
-        logger.error('No games loaded.')
-        return {'statusCode': 500, 'body': json.dumps('No games to process')}
+    try:
+        store = PostgresStore()
+    except Exception as e:
+        logger.error(f'Failed to connect to Postgres: {e}')
+        return {'statusCode': 500, 'body': json.dumps('Failed to connect to Postgres')}
 
-    for game in games:
-        game_id, game_date, game_time, game_venue, game_type = game
-        game_day = pdl.parse(game_date).format('dd, DD MMMM', locale='ru').capitalize()
+    try:
+        games = store.get_games()
+        if games is None:
+            return {'statusCode': 500, 'body': json.dumps('Failed to load games')}
 
-        message = f'⏰ {game_day}, {game_time}\n\n📍 {game_venue}\n\n🎰 {game_type}'
-        message_res = send_message(BOT_TOKEN, CHANNEL_ID, message)
+        if not games:
+            logger.info('No games to process.')
+            return {'statusCode': 200, 'body': json.dumps('No games to process')}
 
-        if not message_res:
-            logger.error(f'Failed to send message for game {game_id}.')
-            continue
+        for game in games:
+            game_id, game_date, game_time, game_venue, game_type = game
+            game_day = pdl.parse(game_date).format('dd, DD MMMM', locale='ru').capitalize()
+            game_schedule = f'{game_day}, {game_time}' if game_time else game_day
 
-        recent_updates = get_group_updates(BOT_TOKEN, DYNAMODB_UPDATE_TABLE_NAME, BOT_NAME)
-        reply_id = get_message_ids(recent_updates)
+            message = f'⏰ {game_schedule}\n\n📍 {game_venue}\n\n🎰 {game_type}'
+            message_res = send_message(BOT_TOKEN, CHANNEL_ID, message)
 
-        if not reply_id:
-            logger.error(f'Failed to get reply ID for game {game_id}.')
-            continue
+            if not message_res:
+                logger.error(f'Failed to send message for game {game_id}.')
+                continue
 
-        poll_question = 'Голосуем'
-        poll_options = ['Иду', '+1', 'Не иду']
-        poll_response = send_poll(BOT_TOKEN, GROUP_ID, poll_question, poll_options, reply_id)
+            recent_updates = get_group_updates(BOT_TOKEN, store, BOT_NAME)
+            reply_id = get_message_ids(recent_updates)
 
-        if poll_response:
-            update_item(DYNAMODB_REG_TABLE_NAME, game_id)
-            logger.info(f'Game {game_id} has been processed')
-        else:
-            logger.error(f'Failed to send poll for game {game_id}.')
+            if not reply_id:
+                logger.error(f'Failed to get reply ID for game {game_id}.')
+                continue
 
-    return {'statusCode': 200, 'body': json.dumps('All games processed successfully')}
+            poll_question = 'Голосуем'
+            poll_options = ['Иду', '+1', 'Не иду']
+            poll_response = send_poll(BOT_TOKEN, GROUP_ID, poll_question, poll_options, reply_id)
+
+            if not poll_response:
+                logger.error(f'Failed to send poll for game {game_id}.')
+                continue
+
+            if store.mark_poll_created(game_id):
+                logger.info(f'Game {game_id} has been processed')
+            else:
+                logger.error(f'Poll was sent for game {game_id}, but Postgres was not updated.')
+
+        return {'statusCode': 200, 'body': json.dumps('All games processed successfully')}
+    finally:
+        store.close()
