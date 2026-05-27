@@ -125,6 +125,60 @@ class PostgresStore:
         finally:
             cursor.close()
 
+    def get_active_poll_ids(self):
+        """Return set of all known poll_ids."""
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(f'SELECT poll_id FROM {QUIZPLEASE_SCHEMA}.polls')
+            return {row[0] for row in cursor.fetchall()}
+        except Exception as e:
+            logger.error(f'Failed to get active poll IDs: {e}')
+            return set()
+        finally:
+            cursor.close()
+
+    def store_poll_answer(self, poll_id, user_id, username, first_name, last_name, option_ids, update_id=None):
+        """Insert a poll_answer event into poll_answers."""
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(
+                f'''
+                INSERT INTO {QUIZPLEASE_SCHEMA}.poll_answers
+                    (poll_id, user_id, username, first_name, last_name, option_ids, update_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ''',
+                (poll_id, user_id, username, first_name, last_name, option_ids, update_id),
+            )
+            self.connection.commit()
+            logger.info(f'Stored poll_answer: poll={poll_id} user={user_id} options={option_ids}')
+        except Exception as e:
+            self.connection.rollback()
+            logger.error(f'Failed to store poll_answer for poll {poll_id}: {e}')
+        finally:
+            cursor.close()
+
+    def store_poll(self, poll_id, game_id, message_id):
+        """
+        Stores poll metadata returned by Telegram for later answer tracking.
+        """
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(
+                f'''
+                INSERT INTO {QUIZPLEASE_SCHEMA}.polls (poll_id, game_id, message_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (poll_id) DO NOTHING
+                ''',
+                (poll_id, int(game_id), message_id),
+            )
+            self.connection.commit()
+            logger.info(f'Poll {poll_id} stored for game {game_id}')
+        except Exception as e:
+            self.connection.rollback()
+            logger.error(f'Failed to store poll {poll_id}: {e}')
+        finally:
+            cursor.close()
+
     def mark_poll_created(self, game_id):
         """
         Marks a game as having a created poll in Postgres.
@@ -179,14 +233,16 @@ def send_message(_bot_token, _channel_id, _message):
 def get_group_updates(_bot_token, _store, _bot_name, _timeout=5, _time_window=15):
     """
     Gets recent updates from a group connected to the channel.
+    Handles message updates (for reply_id lookup) and poll_answer updates (persisted to DB).
     """
     url = f'https://api.telegram.org/bot{_bot_token}/getUpdates'
     cutoff_time = pdl.now().subtract(seconds=_time_window).int_timestamp
     last_update_id = _store.get_last_update_id(_bot_name)
+    active_poll_ids = _store.get_active_poll_ids()
     recent_updates = []
 
     while True:
-        body = {'allowed_updates': json.dumps(['message']), 'timeout': _timeout, 'offset': last_update_id}
+        body = {'allowed_updates': json.dumps(['message', 'poll_answer']), 'timeout': _timeout, 'offset': last_update_id}
         response = req.get(url, params=body)
         if response.status_code == 200:
             logger.info(f'Updates for {last_update_id} received successfully!')
@@ -200,9 +256,23 @@ def get_group_updates(_bot_token, _store, _bot_name, _timeout=5, _time_window=15
             break
 
         for update in result:
-            message_date = update['message']['date']
-            if message_date >= cutoff_time:
-                recent_updates.append(update)
+            if 'poll_answer' in update:
+                pa = update['poll_answer']
+                if pa['poll_id'] in active_poll_ids:
+                    user = pa.get('user') or {}
+                    _store.store_poll_answer(
+                        poll_id=pa['poll_id'],
+                        user_id=user.get('id'),
+                        username=user.get('username'),
+                        first_name=user.get('first_name', ''),
+                        last_name=user.get('last_name'),
+                        option_ids=pa.get('option_ids', []),
+                        update_id=update['update_id'],
+                    )
+            elif 'message' in update:
+                if update['message']['date'] >= cutoff_time:
+                    recent_updates.append(update)
+
             last_update_id = update['update_id'] + 1
 
         _store.update_last_update_id(_bot_name, last_update_id)
@@ -247,11 +317,11 @@ def send_poll(_bot_token, _group_id, _question, _options, _reply_to_message_id):
 
     if response.status_code == 200:
         logger.info('Poll sent successfully!')
-        return response.json()['ok']
+        return response.json()['result']
     else:
         logger.error(f'Failed to send poll. Status code: {response.status_code}')
         logger.info(f'Response: {response.json()}')
-        return response.json()['ok']
+        return None
 
 
 def lambda_handler(event=None, context=None):
@@ -296,6 +366,12 @@ def lambda_handler(event=None, context=None):
             if not poll_response:
                 logger.error(f'Failed to send poll for game {game_id}.')
                 continue
+
+            store.store_poll(
+                poll_id=poll_response['poll']['id'],
+                game_id=game_id,
+                message_id=poll_response['message_id'],
+            )
 
             if store.mark_poll_created(game_id):
                 logger.info(f'Game {game_id} has been processed')
