@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 
 import pendulum as pdl
 import requests as req
@@ -352,7 +353,8 @@ def lambda_handler(event=None, context=None):
                 logger.error(f'Failed to send message for game {game_id}.')
                 continue
 
-            recent_updates = get_group_updates(BOT_TOKEN, store, BOT_NAME)
+            time.sleep(2)
+            recent_updates = get_group_updates(BOT_TOKEN, store, BOT_NAME, _timeout=10)
             reply_id = get_message_ids(recent_updates)
 
             if not reply_id:
